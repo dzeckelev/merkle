@@ -1,2 +1,2 @@
 # merkle
-Merkle root implementation
+Merkle tree implementation
