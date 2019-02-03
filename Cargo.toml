@@ -7,3 +7,4 @@ authors = ["bik <dzeckelev@gmail.com>"]
 
 [dependencies]
 tiny-keccak = "1.4"
+ethereum-types = "0.4"
