@@ -16,6 +16,7 @@ pub const DEFAULT_DEPTH: usize = 257;
 pub type Leaves = HashMap<U256, H256>;
 pub type Tree = Vec<RefCell<Leaves>>;
 
+#[derive(Debug, Clone)]
 pub struct MerkleTree {
     root: H256,
     depth: usize,
@@ -52,7 +53,38 @@ impl fmt::Display for MerkleError {
     }
 }
 
-pub fn create(leaves: Leaves, default_nodes: Leaves, depth: usize) -> Vec<RefCell<Leaves>> {
+impl MerkleTree {
+    pub fn new(leaves: Leaves, depth: usize) -> MerkleTree {
+        let len = leaves.len();
+        let cap = 2.0_f64.powi(len as i32);
+
+        if len > (cap.floor() as usize) {
+            panic!("123");
+        }
+
+        let default_nodes = default_nodes(depth);
+        let nodes = create(leaves, &default_nodes, depth);
+        let root: H256;
+
+        {
+            let leave: &RefCell<Leaves> = nodes.get(nodes.len() - 1).unwrap();
+            root = leave.borrow().get(&null_u256()).unwrap().clone();
+        }
+
+        MerkleTree {
+            root,
+            depth,
+            default_nodes,
+            nodes,
+        }
+    }
+
+    pub fn root(&self) -> H256 {
+        self.root.clone()
+    }
+}
+
+fn create(leaves: Leaves, default_nodes: &Leaves, depth: usize) -> Vec<RefCell<Leaves>> {
     let mut tree = vec![RefCell::new(leaves)];
 
     {
@@ -125,7 +157,7 @@ pub fn create(leaves: Leaves, default_nodes: Leaves, depth: usize) -> Vec<RefCel
     tree
 }
 
-pub fn new_default_nodes(depth: usize) -> Leaves {
+fn default_nodes(depth: usize) -> Leaves {
     let mut nodes = HashMap::new();
     nodes.insert(null_u256(), null_h256());
 
@@ -152,66 +184,25 @@ fn null_h256() -> H256 {
 mod tests {
     use super::*;
 
-    //    fn new_tree() -> Tree {
-    //        let tree = Tree::new();
-    //        tree.add_branch(HashMap::new());
-    //        tree
-    //    }
-
     #[test]
-    fn new_tree2() {
+    fn new_tree3() {
         let mut leaves = HashMap::new();
-        let mut default_nodes = HashMap::new();
-
-        let tree = create(leaves, default_nodes, DEFAULT_DEPTH);
+        leaves.insert(
+            U256::from(1),
+            H256::from("0x0101010101010101010101010101010101010101010101010101010101010101"),
+        );
+        leaves.insert(
+            U256::from(2),
+            H256::from("0x0101010101010101010101010101010101010101010101010101010101010101"),
+        );
+        let tree = MerkleTree::new(leaves, DEFAULT_DEPTH);
     }
 
-    //    #[test]
-    //    fn add_branch() {
-    //        let tree = new_tree();
-    //
-    //        assert_eq!(tree.len(), 1);
-    //    }
-    //
-    //    #[test]
-    //    fn leaf() {
-    //        let test_branch = 0;
-    //        let test_key = U256::from("1232132133453535435345345345");
-    //        let exp = H256::from([1_u8; 32]);
-    //        let tree = new_tree();
-    //        tree.add_leaf(test_branch, test_key, exp);
-    //        let res = tree.leaf(test_branch, test_key);
-    //
-    //        assert_eq!(res, exp);
-    //    }
-    //
     #[test]
     fn create_default_nodes() {
         let exp = super::DEFAULT_DEPTH;
-        let default_nodes = super::new_default_nodes(exp);
+        let default_nodes = super::default_nodes(exp);
 
         assert_eq!(default_nodes.len(), exp);
     }
-    //
-    //    #[test]
-    //    fn create() {
-    //        let default_nodes = super::new_default_nodes(2);
-    //        println!("{:?}", default_nodes);
-    //
-    //
-    //        let mut nodes = HashMap::new();
-    //        nodes.insert(U256::from(1), H256::from("0x0101010101010101010101010101010101010101010101010101010101010101"));
-    //        nodes.insert(U256::from(2), H256::from("0x0101010101010101010101010101010101010101010101010101010101010101"));
-    //
-    //       let tree =  super::create(nodes, default_nodes, 2);
-    //        println!("{:?}", tree);
-    //    }
-    //
-    //    #[test]
-    //    fn sort_keys() {
-    //        let tree = new_tree();
-    //        tree.add_branch(HashMap::new());
-    //        let v1 = H256::from([0_u8;32]);
-    //        tree.add_leaf(tree.len() - 1, U256::from(5), v1);
-    //    }
 }
