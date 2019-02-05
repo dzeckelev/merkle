@@ -1,10 +1,11 @@
 extern crate ethereum_types;
 extern crate tiny_keccak;
 
-use std::cell::RefCell;
 use std::collections::hash_map::HashMap;
 use std::error::Error;
 use std::ops::Sub;
+use std::rc::Rc;
+use std::sync::RwLock;
 use std::vec::Vec;
 
 use ethereum_types::{H256, U256};
@@ -13,34 +14,34 @@ use tiny_keccak::keccak256;
 
 pub const DEFAULT_DEPTH: usize = 257;
 
-pub type Leaves = HashMap<U256, H256>;
-pub type Tree = Vec<RefCell<Leaves>>;
-
-#[derive(Debug, Clone)]
-pub struct MerkleTree {
-    root: H256,
-    depth: usize,
-    default_nodes: Leaves,
-    nodes: Tree,
-}
+pub type Nodes = HashMap<U256, H256>;
+pub type Levels = Vec<Nodes>;
 
 pub type Result<T> = std::result::Result<T, MerkleError>;
 
+#[derive(Debug)]
+pub struct MerkleTree {
+    root: H256,
+    depth: usize,
+    default_nodes: Nodes,
+    tree: RwLock<Rc<Levels>>,
+}
+
 #[derive(Debug, Clone)]
 pub enum MerkleError {
-    DepthErr,
+    ErrSmallDepth,
 }
 
 impl Error for MerkleError {
     fn description(&self) -> &str {
         match *self {
-            MerkleError::DepthErr => "very large depth",
+            MerkleError::ErrSmallDepth => "small depth",
         }
     }
 
     fn cause(&self) -> Option<&Error> {
         match *self {
-            MerkleError::DepthErr => None,
+            MerkleError::ErrSmallDepth => None,
         }
     }
 }
@@ -48,34 +49,30 @@ impl Error for MerkleError {
 impl fmt::Display for MerkleError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            MerkleError::DepthErr => write!(f, "very large depth"),
+            MerkleError::ErrSmallDepth => write!(f, "small depth"),
         }
     }
 }
 
 impl MerkleTree {
-    pub fn new(leaves: Leaves, depth: usize) -> MerkleTree {
-        let len = leaves.len();
-        let cap = 2.0_f64.powi(len as i32);
+    pub fn new(nodes: Nodes, depth: usize) -> MerkleTree {
+        let len = nodes.len();
+        let cap = 2.0_f64.powi(depth as i32);
 
-        if len > (cap.floor() as usize) {
+        if (len as f64) > cap {
+            // TODO
             panic!("123");
         }
 
         let default_nodes = default_nodes(depth);
-        let nodes = create(leaves, &default_nodes, depth);
-        let root: H256;
-
-        {
-            let leave: &RefCell<Leaves> = nodes.get(nodes.len() - 1).unwrap();
-            root = leave.borrow().get(&null_u256()).unwrap().clone();
-        }
+        let levels = create_tree(nodes, &default_nodes, depth);
+        let root = root(&levels);
 
         MerkleTree {
             root,
             depth,
             default_nodes,
-            nodes,
+            tree: RwLock::new(Rc::new(levels)),
         }
     }
 
@@ -84,89 +81,93 @@ impl MerkleTree {
     }
 }
 
-fn create(leaves: Leaves, default_nodes: &Leaves, depth: usize) -> Vec<RefCell<Leaves>> {
-    let mut tree = vec![RefCell::new(leaves)];
-
-    {
-        let mut _tree_level: RefCell<Leaves>;
-
-        for level in 0..depth - 1 {
-            {
-                let level: &RefCell<Leaves> = tree.get(level).unwrap();
-                _tree_level = level.clone();
-            }
-
-            let mut next_level: Leaves = HashMap::new();
-            let mut prev_index = U256::from(0);
-
-            let mut keys = Vec::new();
-
-            {
-                for (k, _) in _tree_level.borrow().iter() {
-                    keys.push(k.clone())
-                }
-                keys.sort();
-            }
-
-            for index in &keys {
-                {
-                    let div = index / 2;
-
-                    let mut value: Vec<u8> = _tree_level
-                        .borrow()
-                        .get(index)
-                        .unwrap_or(&null_h256())
-                        .to_vec();
-
-                    let mut hash;
-
-                    if index % 2 == null_u256() {
-                        let mut value2: Vec<u8> =
-                            default_nodes.get(&U256::from(level)).unwrap().to_vec();
-                        value.append(&mut value2);
-                        hash = keccak256(value.as_slice());
-                    } else {
-                        if index.clone() == prev_index + 1 {
-                            let mut value2: Vec<u8> = _tree_level
-                                .borrow_mut()
-                                .get(&U256::from(prev_index))
-                                .unwrap_or(&null_h256())
-                                .to_vec();
-                            value2.append(&mut value);
-                            hash = keccak256(value2.as_slice());
-                        } else {
-                            let mut value2: Vec<u8> =
-                                default_nodes.get(&U256::from(level)).unwrap().to_vec();
-                            value2.append(&mut value);
-                            hash = keccak256(value2.as_slice());
-                        }
-                    }
-
-                    next_level.insert(U256::from(div), H256::from(hash));
-                }
-                prev_index = index.clone();
-            }
-
-            {
-                let level = RefCell::new(next_level);
-                _tree_level = level.clone();
-                tree.push(level);
-            }
-        }
-    }
-    tree
+fn root(levels: &Levels) -> H256 {
+    let level: &Nodes = levels.get(&levels.len() - 1).unwrap();
+    level.get(&null_u256()).unwrap().clone()
 }
 
-fn default_nodes(depth: usize) -> Leaves {
+fn sort_keys(level: &Nodes) -> Vec<U256> {
+    let mut keys = Vec::new();
+    for (k, _) in level.iter() {
+        keys.push(k.clone())
+    }
+    keys.sort();
+    keys
+}
+
+fn calc_hash(left: &mut Vec<u8>, right: &mut Vec<u8>) -> [u8; 32] {
+    left.append(right);
+    keccak256(left.as_slice())
+}
+
+#[allow(dead_code)]
+fn create_hash(
+    level: usize,
+    prev_index: &U256,
+    node_index: &U256,
+    default_nodes: &Nodes,
+    tree_level: &Nodes,
+) -> [u8; 32] {
+    let get_value = |nodes: &Nodes, index: &U256| -> Vec<u8> {
+        nodes.get(index).unwrap_or(&null_h256()).to_vec()
+    };
+
+    let mut left;
+    let mut right;
+
+    if node_index % 2 == null_u256() {
+        left = get_value(tree_level, node_index);;
+        right = get_value(default_nodes, &U256::from(level));
+    } else {
+        if node_index.clone() == prev_index + 1 {
+            left = get_value(tree_level, prev_index);
+            right = get_value(tree_level, node_index);;
+        } else {
+            left = get_value(default_nodes, &U256::from(level));
+            right = get_value(tree_level, node_index);;
+        }
+    }
+    calc_hash(&mut left, &mut right)
+}
+
+fn fill_tree(tree: &mut Levels, default_nodes: &Nodes, depth: usize) {
+    for level in 0..depth - 1 {
+        let mut next_level: Nodes = HashMap::new();
+        let mut prev_index = null_u256();
+        let mut keys = sort_keys(tree.get(level).unwrap());
+
+        for node_index in keys {
+            {
+                let tree_level: &Nodes = tree.get(level).unwrap();
+                let div = node_index / 2;
+                let mut hash =
+                    create_hash(level, &prev_index, &node_index, default_nodes, tree_level);
+
+                next_level.insert(U256::from(div), H256::from(hash));
+            }
+            prev_index = node_index.clone();
+        }
+
+        tree.push(next_level);
+    }
+}
+
+fn create_tree(nodes: Nodes, default_nodes: &Nodes, depth: usize) -> Levels {
+    let mut levels = vec![nodes];
+    fill_tree(&mut levels, &default_nodes, depth);
+    levels
+}
+
+fn default_nodes(depth: usize) -> Nodes {
     let mut nodes = HashMap::new();
     nodes.insert(null_u256(), null_h256());
 
     for level in 1..depth {
         let next_level = level.sub(1);
-        let mut previous = nodes.get(&U256::from(next_level)).unwrap().to_vec();
-        let mut previous2 = previous.clone();
-        previous.append(&mut previous2);
-        let hash = keccak256(&previous);
+        let mut left = nodes.get(&U256::from(next_level)).unwrap().to_vec();
+        let mut right = left.clone();
+        left.append(&mut right);
+        let hash = keccak256(&left);
         nodes.insert(U256::from(level), H256::from(hash));
     }
     nodes
@@ -185,24 +186,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_tree3() {
-        let mut leaves = HashMap::new();
-        leaves.insert(
-            U256::from(1),
-            H256::from("0x0101010101010101010101010101010101010101010101010101010101010101"),
-        );
-        leaves.insert(
-            U256::from(2),
-            H256::from("0x0101010101010101010101010101010101010101010101010101010101010101"),
-        );
+    fn create_tree() {
+        let hex = "0x0101010101010101010101010101010101010101010101010101010101010101";
+        let exp_root = "0x48ce19d92fe8d6b4be1d7744c1a798bde5d7f12ad192fe520aeae0462f3df29e";
+
+        let leaves: HashMap<U256, H256> = [
+            (U256::from(1), H256::from(hex)),
+            (U256::from(2), H256::from(hex)),
+            (U256::from(3), H256::from(hex)),
+            (U256::from(4), H256::from(hex)),
+        ]
+        .iter()
+        .cloned()
+        .collect();
+
         let tree = MerkleTree::new(leaves, DEFAULT_DEPTH);
-    }
-
-    #[test]
-    fn create_default_nodes() {
-        let exp = super::DEFAULT_DEPTH;
-        let default_nodes = super::default_nodes(exp);
-
-        assert_eq!(default_nodes.len(), exp);
+        assert_eq!(tree.root(), H256::from(exp_root));
     }
 }
