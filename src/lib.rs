@@ -98,21 +98,19 @@ impl MerkleTree {
 
             let tree = &self.tree.read().unwrap().clone();
             let level: &Nodes = tree.get(level_index).unwrap();
-            match level.get(&sub_index) {
-                Some(hash) => {
-                    let mut data = hash.to_vec();
-                    proof.append(&mut data);
-                }
-                None => {
+
+            let mut data = level.get(&sub_index).map_or_else(
+                || {
                     let default_nodes = self.default_nodes.clone();
-                    let mut data = default_nodes
+                    default_nodes
                         .get(&U256::from(level_index))
-                        .unwrap()
-                        .clone()
-                        .to_vec();
-                    proof.append(&mut data);
-                }
-            }
+                        .unwrap_or(&null_h256())
+                        .to_vec()
+                },
+                |hash| hash.to_vec(),
+            );
+
+            proof.append(&mut data);
         }
 
         Ok(proof)
@@ -152,9 +150,10 @@ pub fn verify_proof(index: U256, leaf: H256, root: H256, proof: &[u8]) -> bool {
 
 fn root(levels: &Levels) -> Result<H256> {
     let level: &Nodes = levels
-        .get(&levels.len() - 1)
+        .get(levels.len() - 1)
         .ok_or(MerkleError::ErrKeyNotFound)?;
-    Ok(level.get(&null_u256()).unwrap_or(&null_h256()).clone())
+    let hash = level.get(&null_u256()).unwrap_or(&null_h256()).clone();
+    Ok(hash)
 }
 
 fn sort_keys(level: &Nodes) -> Vec<U256> {
