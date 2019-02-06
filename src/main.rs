@@ -22,6 +22,6 @@ fn main() {
         H256::from("0x0101010101010101010101010101010101010101010101010101010101010101"),
     );
 
-    let tree = merkle::MerkleTree::new(leaves, merkle::DEFAULT_DEPTH);
-    println!("{:?}", tree.root());
+    let tree = merkle::MerkleTree::build(leaves, merkle::DEFAULT_DEPTH);
+    println!("{:?}", tree.unwrap().root());
 }
