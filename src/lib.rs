@@ -5,7 +5,6 @@ use std::collections::hash_map::HashMap;
 use std::error::Error;
 use std::ops::Sub;
 use std::rc::Rc;
-use std::sync::RwLock;
 use std::vec::Vec;
 
 use ethereum_types::{H256, U256};
@@ -16,66 +15,65 @@ pub const DEFAULT_DEPTH: usize = 257;
 
 pub type Nodes = HashMap<U256, H256>;
 pub type Levels = Vec<Nodes>;
-
-pub type Result<T> = std::result::Result<T, MerkleError>;
+pub type Result<T> = std::result::Result<T, TreeError>;
 
 #[derive(Debug)]
-pub struct MerkleTree {
+pub struct Tree {
     root: H256,
     depth: usize,
     default_nodes: Rc<Nodes>,
-    tree: RwLock<Rc<Levels>>,
+    tree: Rc<Levels>,
 }
 
 #[derive(Debug, Clone)]
-pub enum MerkleError {
+pub enum TreeError {
     ErrSmallDepth,
     ErrKeyNotFound,
 }
 
-impl Error for MerkleError {
+impl Error for TreeError {
     fn description(&self) -> &str {
         match *self {
-            MerkleError::ErrSmallDepth => "small depth",
-            MerkleError::ErrKeyNotFound => "key not found",
+            TreeError::ErrSmallDepth => "small depth",
+            TreeError::ErrKeyNotFound => "key not found",
         }
     }
 
     fn cause(&self) -> Option<&Error> {
         match *self {
-            MerkleError::ErrSmallDepth => None,
-            MerkleError::ErrKeyNotFound => None,
+            TreeError::ErrSmallDepth => None,
+            TreeError::ErrKeyNotFound => None,
         }
     }
 }
 
-impl fmt::Display for MerkleError {
+impl fmt::Display for TreeError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            MerkleError::ErrSmallDepth => write!(f, "small depth"),
-            MerkleError::ErrKeyNotFound => write!(f, "key not found"),
+            TreeError::ErrSmallDepth => write!(f, "small depth"),
+            TreeError::ErrKeyNotFound => write!(f, "key not found"),
         }
     }
 }
 
-impl MerkleTree {
-    pub fn build(nodes: Nodes, depth: usize) -> Result<MerkleTree> {
+impl Tree {
+    pub fn build(nodes: Nodes, depth: usize) -> Result<Tree> {
         let len = nodes.len();
         let cap = 2.0_f64.powi(depth as i32);
 
         if (len as f64) > cap {
-            return Err(MerkleError::ErrSmallDepth);
+            return Err(TreeError::ErrSmallDepth);
         }
 
         let default_nodes = default_nodes(depth)?;
         let levels = create_tree_levels(nodes, &default_nodes, depth)?;
         let root = root(&levels)?;
 
-        let mt = MerkleTree {
+        let mt = Tree {
             root,
             depth,
             default_nodes: Rc::new(default_nodes),
-            tree: RwLock::new(Rc::new(levels)),
+            tree: Rc::new(levels),
         };
 
         Ok(mt)
@@ -96,7 +94,7 @@ impl MerkleTree {
 
             index = index.clone() / 2;
 
-            let tree = &self.tree.read().unwrap().clone();
+            let tree = self.tree.clone();
             let level: &Nodes = tree.get(level_index).unwrap();
 
             let mut data = level.get(&sub_index).map_or_else(
@@ -114,6 +112,10 @@ impl MerkleTree {
         }
 
         Ok(proof)
+    }
+
+    pub fn verify_proof(&self, index: U256, leaf: H256, root: H256, proof: &[u8]) -> bool {
+        verify_proof(index, leaf, root, proof)
     }
 
     pub fn root(&self) -> H256 {
@@ -151,8 +153,12 @@ pub fn verify_proof(index: U256, leaf: H256, root: H256, proof: &[u8]) -> bool {
 fn root(levels: &Levels) -> Result<H256> {
     let level: &Nodes = levels
         .get(levels.len() - 1)
-        .ok_or(MerkleError::ErrKeyNotFound)?;
-    let hash = level.get(&null_u256()).unwrap_or(&null_h256()).clone();
+        .ok_or(TreeError::ErrKeyNotFound)?;
+    let hash = level
+        .get(&null_u256())
+        .unwrap_or(&null_h256())
+        .clone()
+        .into();
     Ok(hash)
 }
 
@@ -206,13 +212,13 @@ fn fill_tree(tree: &mut Levels, default_nodes: &Nodes, depth: usize) -> Result<(
         let mut keys;
 
         {
-            let lvl = tree.get(level).ok_or(MerkleError::ErrKeyNotFound)?;
+            let lvl = tree.get(level).ok_or(TreeError::ErrKeyNotFound)?;
             keys = sort_keys(lvl);
         }
 
         for node_index in keys {
             {
-                let tree_level: &Nodes = tree.get(level).ok_or(MerkleError::ErrKeyNotFound)?;
+                let tree_level: &Nodes = tree.get(level).ok_or(TreeError::ErrKeyNotFound)?;
                 let div = node_index / 2;
                 let mut hash =
                     create_hash(level, &prev_index, &node_index, default_nodes, tree_level);
@@ -241,14 +247,14 @@ fn default_nodes(depth: usize) -> Result<Nodes> {
     nodes.insert(null_u256(), null_h256());
 
     if depth < 2 {
-        return Err(MerkleError::ErrSmallDepth);
+        return Err(TreeError::ErrSmallDepth);
     }
 
     for level in 1..depth {
         let next_level = level.sub(1);
         let mut left = nodes
             .get(&U256::from(next_level))
-            .ok_or(MerkleError::ErrKeyNotFound)?
+            .ok_or(TreeError::ErrKeyNotFound)?
             .to_vec();
         let mut right = left.clone();
         left.append(&mut right);
@@ -286,7 +292,7 @@ mod tests {
         .cloned()
         .collect();
 
-        let tree = MerkleTree::build(leaves, DEFAULT_DEPTH);
+        let tree = Tree::build(leaves, DEFAULT_DEPTH).unwrap();
         assert_eq!(tree.root(), H256::from(exp_root));
     }
 }

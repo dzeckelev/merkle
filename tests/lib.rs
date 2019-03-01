@@ -20,6 +20,6 @@ fn create_tree() {
     .cloned()
     .collect();
 
-    let tree = MerkleTree::build(leaves, DEFAULT_DEPTH);
-    assert_eq!(tree.unwrap().root(), H256::from(exp_root));
+    let tree = Tree::build(leaves, DEFAULT_DEPTH).unwrap();
+    assert_eq!(tree.root(), H256::from(exp_root));
 }
